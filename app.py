@@ -7,6 +7,7 @@ import ffmpeg
 import re
 import time
 import threading
+import random
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'downloads'
@@ -49,6 +50,13 @@ def progress_hook(d):
             'filename': d.get('filename', '')
         })
         
+user_agents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
+]
+
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     cleanup_old_files()  # Panggil fungsi untuk membersihkan file lama
@@ -62,12 +70,21 @@ def index():
         session_id = request.form.get('session_id')  # Tambah session ID untuk tracking
 
         download_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{filename}.%(ext)s")
+        cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cookies.txt')
 
         ydl_opts = {
             'format': quality,
             'outtmpl': download_path,
             'progress_hooks': [progress_hook],  # Tambahkan progress hook
+            'http_headers': {
+                'User-Agent': random.choice(user_agents),
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            }
         }
+
+        if os.path.exists(cookies_file):
+            ydl_opts['cookiefile'] = cookies_file
 
         def process_video():
             try:
