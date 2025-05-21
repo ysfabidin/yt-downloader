@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        label {
+            display: block;
+            margin-top: 10px;
+        }
+
+        input,
+        select {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+        }
+
+        #video-info {
+            margin-top: 20px;
+            display: none;
+        }
+
+        #loading {
+            display: none;
+            margin-top: 10px;
+        }
+
+        #progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body class="p-4">
+    <div class="container">
+        <h1 class="mb-4">🎬 YouTube Downloader with Cut</h1>
+
+        <form id="download-form" method="POST">
+            <div class="mb-3">
+                <label for="youtube_url">Video URL</label>
+                <input type="url" class="form-control" id="youtube_url" name="youtube_url" required>
+            </div>
+            <button type="button" id="fetch-btn" class="btn btn-primary">Fetch Video Info</button>
+
+            <div id="loading" class="alert alert-info mt-3" role="alert" style="display: none;">
+                Loading video information...
+            </div>
+
+            <div id="video-info" class="mt-4" style="display: none;">
+                <h2 id="video-title" class="mb-3"></h2>
+
+                <div class="mb-3">
+                    <label for="quality">Select Format</label>
+                    <select class="form-control" id="quality" name="quality" required></select>
+                </div>
+
+                <div class="mb-3">
+                    <label for="start">Start Time</label>
+                    <div class="input-group mb-2">
+                        <input type="text" class="form-control" id="start" name="start" placeholder="00:00:00" required>
+                        <button class="btn btn-outline-secondary" type="button" id="start-now">Set to 00:00:00</button>
+                    </div>
+                    <input type="range" class="form-range" id="start-slider" min="0" max="100" value="0">
+                    <small class="form-text text-muted">Drag slider to set start time</small>
+                </div>
+                <div class="mb-3">
+                    <label for="end">End Time</label>
+                    <div class="input-group mb-2">
+                        <input type="text" class="form-control" id="end" name="end" placeholder="00:01:00" required>
+                        <button class="btn btn-outline-secondary" type="button" id="end-max">Set to End</button>
+                    </div>
+                    <input type="range" class="form-range" id="end-slider" min="0" max="100" value="10">
+                    <small class="form-text text-muted">Drag slider to set end time</small>
+                </div>
+                <div class="mb-3">
+                    <label for="format">Output Format</label>
+                    <select class="form-control" id="format" name="format" required>
+                        <option value="mp4">MP4</option>
+                        <option value="mkv">MKV</option>
+                        <option value="webm">WebM</option>
+                        <option value="mp3">MP3 (Audio Only)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="filename">Custom Filename (optional)</label>
+                    <input type="text" class="form-control" id="filename" name="filename">
+                </div>
+                <input type="hidden" id="session_id" name="session_id">
+                <button class="btn btn-danger" type="submit">Download</button>
+            </div>
+        </form>
+
+        <!-- Progress Container -->
+        <div id="progress-container" class="mt-4">
+            <h3>Processing Your Video</h3>
+            <div class="card">
+                <div class="card-body">
+                    <div id="download-stage">
+                        <h5 class="card-title">Downloading Video</h5>
+                        <div class="progress mb-3">
+                            <div id="download-progress-bar"
+                                class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
+                                style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                                0%
+                            </div>
+                        </div>
+                        <p class="card-text">
+                            <span id="download-speed">Speed: 0 MB/s</span><br>
+                            <span id="download-size">0 MB / 0 MB</span>
+                        </p>
+                    </div>
+
+                    <div id="processing-stage" style="display: none;">
+                        <h5 class="card-title">Cutting Video</h5>
+                        <p class="card-text">Please wait while we process your video...</p>
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+
+                    <div id="complete-stage" style="display: none;">
+                        <h5 class="card-title text-success">Processing Complete!</h5>
+                        <p class="card-text">Your download is starting automatically...</p>
+                        <div class="spinner-border spinner-border-sm text-success me-2" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <span id="auto-download-text">Preparing download...</span>
+                    </div>
+
+                    <div id="error-stage" style="display: none;">
+                        <h5 class="card-title text-danger">Error</h5>
+                        <p id="error-message" class="card-text text-danger"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate a unique session ID
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // Initialize socket.io
+        const socket = io();
+        const sessionId = generateSessionId();
+        document.getElementById('session_id').value = sessionId;
+
+        // Handle format fetching
+        document.getElementById('fetch-btn').addEventListener('click', function () {
+            const url = document.getElementById('youtube_url').value;
+            if (!url) {
+                alert('Please enter a YouTube URL');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const videoInfo = document.getElementById('video-info');
+            const qualitySelect = document.getElementById('quality');
+
+            // Clear previous options
+            qualitySelect.innerHTML = '';
+
+            // Show loading
+            loading.style.display = 'block';
+            videoInfo.style.display = 'none';
+
+            // Fetch formats
+            const formData = new FormData();
+            formData.append('youtube_url', url);
+
+            fetch('/get_formats', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        loading.style.display = 'none';
+                        return;
+                    }
+
+                    // Set video title
+                    document.getElementById('video-title').textContent = data.title;
+
+                    // Tambahkan informasi durasi video jika tersedia
+                    if (data.duration) {
+                        videoDuration = data.duration;
+                        document.getElementById('end-slider').max = videoDuration;
+                        document.getElementById('start-slider').max = videoDuration;
+                        document.getElementById('end-slider').value = videoDuration;
+                        document.getElementById('end').value = formatTime(videoDuration);
+                    }
+
+                    // Add format options
+                    data.formats.forEach(format => {
+                        const option = document.createElement('option');
+                        option.value = format.format_id;
+                        option.textContent = format.description;
+                        option.dataset.ext = format.ext;
+                        qualitySelect.appendChild(option);
+                    });
+
+                    // Show video info section
+                    loading.style.display = 'none';
+                    videoInfo.style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error fetching video information:', error);
+                    alert('Error fetching video information. Please try again.');
+                    loading.style.display = 'none';
+                });
+        });
+
+        // Fungsi untuk konversi detik ke format waktu hh:mm:ss
+        function formatTime(seconds) {
+            seconds = Math.floor(seconds);
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = seconds % 60;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // Fungsi untuk parse format waktu hh:mm:ss ke detik
+        function parseTime(timeString) {
+            const parts = timeString.split(':').map(Number);
+            if (parts.length === 3) {
+                return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            } else if (parts.length === 2) {
+                return parts[0] * 60 + parts[1];
+            }
+            return 0;
+        }
+
+        // Variabel untuk menyimpan durasi video
+        let videoDuration = 600; // Default 10 menit jika informasi tidak tersedia
+
+        // Handle form submission
+        document.getElementById('download-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            const progressContainer = document.getElementById('progress-container');
+
+            // Show progress container
+            progressContainer.style.display = 'block';
+            document.getElementById('download-stage').style.display = 'block';
+            document.getElementById('processing-stage').style.display = 'none';
+            document.getElementById('complete-stage').style.display = 'none';
+            document.getElementById('error-stage').style.display = 'none';
+
+            // Format to MB
+            function formatBytes(bytes) {
+                if (!bytes) return '0 MB';
+                return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            }
+
+            // Start the download process
+            fetch('/', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .catch(error => {
+                    console.error('Error starting download:', error);
+                    document.getElementById('error-stage').style.display = 'block';
+                    document.getElementById('error-message').textContent = 'Error starting download process.';
+                });
+
+            // Listen for socket events
+            socket.on('download_progress', function (data) {
+                const progressBar = document.getElementById('download-progress-bar');
+                progressBar.style.width = data.percentage + '%';
+                progressBar.textContent = data.percentage + '%';
+
+                document.getElementById('download-speed').textContent = 'Speed: ' + data.speed;
+                document.getElementById('download-size').textContent =
+                    formatBytes(data.downloaded) + ' / ' + formatBytes(data.total);
+            });
+
+            socket.on('processing_start', function (data) {
+                if (data.session_id === sessionId) {
+                    document.getElementById('download-stage').style.display = 'none';
+                    document.getElementById('processing-stage').style.display = 'block';
+                }
+            });
+
+            socket.on('processing_complete', function (data) {
+                if (data.session_id === sessionId) {
+                    document.getElementById('processing-stage').style.display = 'none';
+                    document.getElementById('complete-stage').style.display = 'block';
+
+                    // Dapatkan URL download
+                    const downloadUrl = data.download_url;
+
+                    // Metode 1: Gunakan window.location untuk download langsung
+                    setTimeout(() => {
+                        // Update teks
+                        document.getElementById('auto-download-text').textContent = 'Download started!';
+
+                        // Buka download dalam tab baru
+                        window.open(downloadUrl, '_blank');
+                    }, 1000);
+                }
+            });
+
+            socket.on('processing_error', function (data) {
+                if (data.session_id === sessionId) {
+                    document.getElementById('download-stage').style.display = 'none';
+                    document.getElementById('processing-stage').style.display = 'none';
+                    document.getElementById('error-stage').style.display = 'block';
+                    document.getElementById('error-message').textContent = data.error;
+                }
+            });
+        });
+
+        // Tambahkan event listeners untuk slider waktu
+        document.getElementById('start-slider').addEventListener('input', function () {
+            const startSeconds = parseInt(this.value);
+            document.getElementById('start').value = formatTime(startSeconds);
+
+            // Pastikan end time lebih dari start time
+            const endSlider = document.getElementById('end-slider');
+            const endSeconds = parseInt(endSlider.value);
+            if (endSeconds <= startSeconds) {
+                endSlider.value = startSeconds + 30; // Tambah 30 detik dari start
+                document.getElementById('end').value = formatTime(startSeconds + 30);
+            }
+        });
+
+        document.getElementById('end-slider').addEventListener('input', function () {
+            const endSeconds = parseInt(this.value);
+            document.getElementById('end').value = formatTime(endSeconds);
+
+            // Pastikan end time lebih dari start time
+            const startSlider = document.getElementById('start-slider');
+            const startSeconds = parseInt(startSlider.value);
+            if (startSeconds >= endSeconds) {
+                startSlider.value = Math.max(0, endSeconds - 30); // Kurangi 30 detik dari end
+                document.getElementById('start').value = formatTime(Math.max(0, endSeconds - 30));
+            }
+        });
+
+        // Tambahkan event listeners untuk input teks waktu
+        document.getElementById('start').addEventListener('change', function () {
+            const startSeconds = parseTime(this.value);
+            document.getElementById('start-slider').value = startSeconds;
+
+            // Pastikan end time lebih dari start time
+            const endInput = document.getElementById('end');
+            const endSeconds = parseTime(endInput.value);
+            if (endSeconds <= startSeconds) {
+                const newEnd = startSeconds + 30;
+                document.getElementById('end-slider').value = newEnd;
+                endInput.value = formatTime(newEnd);
+            }
+        });
+
+        document.getElementById('end').addEventListener('change', function () {
+            const endSeconds = parseTime(this.value);
+            document.getElementById('end-slider').value = endSeconds;
+
+            // Pastikan end time lebih dari start time
+            const startInput = document.getElementById('start');
+            const startSeconds = parseTime(startInput.value);
+            if (startSeconds >= endSeconds) {
+                const newStart = Math.max(0, endSeconds - 30);
+                document.getElementById('start-slider').value = newStart;
+                startInput.value = formatTime(newStart);
+            }
+        });
+
+        // Tambahkan event listeners untuk tombol shortcut
+        document.getElementById('start-now').addEventListener('click', function () {
+            document.getElementById('start').value = '00:00:00';
+            document.getElementById('start-slider').value = 0;
+        });
+
+        document.getElementById('end-max').addEventListener('click', function () {
+            document.getElementById('end').value = formatTime(videoDuration);
+            document.getElementById('end-slider').value = videoDuration;
+        });
+    </script>
+</body>
+
+</html>
